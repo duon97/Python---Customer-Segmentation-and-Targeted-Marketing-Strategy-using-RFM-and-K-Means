@@ -32,137 +32,76 @@ The data contains sales history only, with no demographic information about cust
 
 | Attribute | Description |
 |---|---|
-| Recency | Days since the customer's last purchase |
-| Frequency | Number of distinct invoices of the customer |
+| Recency | How recently the customer last purchased |
+| Frequency | How often the customer purchases |
 | Monetary (Amount) | Total amount (GBP) of all the customer's transactions |
 
-## IV. Explore the Dataset
+## IV. Methodology
 
-### Step 1: Collect, clean, and preprocess the transaction data
+### 1. Prepare the data
+Collect, clean, and preprocess the transaction data, then aggregate it into one row per customer with Recency, Frequency, and Monetary. The three metrics are standardized so that no single metric dominates the distance calculation.
 
-```python
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+### 2. K-means clustering
+K-means groups customers so that customers in the same cluster are close to each other in RFM space and far from customers in other clusters. The number of clusters K must be chosen in advance, so the model is run with K = 3, 5, and 7.
 
-df = pd.read_csv("data/transactions.csv", encoding="ISO-8859-1")
-df["InvoiceDate"] = pd.to_datetime(df["InvoiceDate"])
+### 3. Silhouette score
+The silhouette score evaluates how well each customer fits its own cluster compared with the nearest other cluster. It ranges from -1 to 1: values close to 1 mean clusters are compact and well separated, values near 0 mean clusters overlap, and negative values mean customers are likely in the wrong cluster. It is used to compare different values of K.
 
-# Remove rows without a customer, cancelled invoices, and invalid quantity or price
-df = df.dropna(subset=["CustomerID"])
-df = df[~df["InvoiceNo"].astype(str).str.startswith("C")]
-df = df[(df["Quantity"] > 0) & (df["UnitPrice"] > 0)]
+| K | Silhouette score |
+|---|---|
+| 3 | 0.34 |
+| 5 | 0.30 |
+| 7 | 0.31 |
 
-df["CustomerID"] = df["CustomerID"].astype(int)
-df["Amount"] = df["Quantity"] * df["UnitPrice"]
-```
+K = 3 has the highest score (0.34), against 0.31 for K = 7 and 0.30 for K = 5. All three fall in the moderate range (0.25 to 0.5), so the clusters have a reasonable structure but are not sharply separated. The differences between the three scores are small (0.04), so the score alone does not decide the choice.
+### 4. Interpret each cluster
+Each cluster is described by its RFM profile, using boxplots of Amount (Monetary) per cluster to compare the median, the spread, and the outliers, then labeled by business value.
 
-### Step 2: Calculate RFM
+## V. Cluster Analysis
 
-```python
-snapshot_date = df["InvoiceDate"].max() + pd.Timedelta(days=1)
+Values below are read from the charts and are approximate.
 
-rfm = df.groupby("CustomerID").agg(
-    Recency=("InvoiceDate", lambda x: (snapshot_date - x.max()).days),
-    Frequency=("InvoiceNo", "nunique"),
-    Amount=("Amount", "sum"),
-).reset_index()
-```
+### K = 3 (silhouette 0.34)
 
-Remove outliers with the IQR rule, then standardize the RFM metrics.
+<img width="997" height="570" alt="image" src="https://github.com/user-attachments/assets/37b5b206-4db7-4eb4-9e1d-42c2c38c562e" />
 
-```python
-def remove_outliers(data, cols):
-    for c in cols:
-        q1, q3 = data[c].quantile([0.25, 0.75])
-        iqr = q3 - q1
-        data = data[(data[c] >= q1 - 1.5 * iqr) & (data[c] <= q3 + 1.5 * iqr)]
-    return data
+- Cluster 2: highest spend. Median about £2,700, middle half between about £1,900 and £3,900, no outliers.
+- Cluster 0: middle spend. Median about £1,000, middle half between about £650 and £1,600. Many high outliers up to about £5,300 reach the range of Cluster 2.
+- Cluster 1: lowest spend. Median about £300, middle half between about £170 and £430, almost all customers below about £850.
 
-rfm_clean = remove_outliers(rfm, ["Recency", "Frequency", "Amount"])
+### K = 5 (silhouette 0.30)
 
-scaler = StandardScaler()
-rfm_scaled = scaler.fit_transform(rfm_clean[["Recency", "Frequency", "Amount"]])
-```
+<img width="1123" height="543" alt="image" src="https://github.com/user-attachments/assets/ef27d83b-4dde-4e3e-8fd7-79fd2a5ee5db" />
 
-### Step 3: Choose K and cluster customers with K-means
+- Cluster 1: highest spend. Median about £3,100, middle half between about £2,100 and £4,250.
+- Cluster 3: upper-middle spend. Median about £1,750, middle half between about £1,170 and £2,580, with high outliers up to about £5,700.
+- Cluster 0: middle spend. Median about £800, middle half between about £580 and £1,130, with outliers up to about £5,000.
+- Cluster 4: low spend. Median about £390, middle half between about £250 and £600.
+- Cluster 2: lowest spend. Median about £230, middle half between about £150 and £330, maximum about £770.
 
-```python
-inertia, sil = [], []
-k_range = range(2, 9)
-for k in k_range:
-    km = KMeans(n_clusters=k, random_state=42, n_init=10).fit(rfm_scaled)
-    inertia.append(km.inertia_)
-    sil.append(silhouette_score(rfm_scaled, km.labels_))
+### K = 7 (silhouette 0.31)
 
-fig, ax = plt.subplots(1, 2, figsize=(12, 4))
-ax[0].plot(k_range, inertia, marker="o")
-ax[0].set_title("Elbow method")
-ax[0].set_xlabel("K")
-ax[1].plot(k_range, sil, marker="o")
-ax[1].set_title("Silhouette score")
-ax[1].set_xlabel("K")
-plt.show()
-```
+<img width="1047" height="581" alt="image" src="https://github.com/user-attachments/assets/b7338a7a-9367-406b-bab5-b40081c25d7c" />
 
-```python
-kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
-rfm_clean = rfm_clean.copy()
-rfm_clean["Cluster"] = kmeans.fit_predict(rfm_scaled)
+- Cluster 3: highest spend. Median about £4,750, middle half between about £4,120 and £5,260.
+- Clusters 1 and 5: upper-middle spend. Medians about £2,150 and £2,100, middle halves between about £1,550 and £3,080 (Cluster 1) and £1,450 and £2,890 (Cluster 5).
+- Clusters 2 and 6: middle spend. Medians about £700 and £790, middle halves between about £490 and £950 (Cluster 2) and £580 and £1,130 (Cluster 6). Cluster 6 has many high outliers up to about £4,970.
+- Clusters 0 and 4: lowest spend. Medians about £220 and £270, maximum about £850 and £1,020.
+- Three pairs of clusters (1 and 5, 2 and 6, 0 and 4) have almost the same Amount distribution, so they can only be told apart by Recency or Frequency.
 
-rfm_clean.groupby("Cluster").agg(
-    Customers=("CustomerID", "count"),
-    Recency=("Recency", "mean"),
-    Frequency=("Frequency", "mean"),
-    Amount=("Amount", "mean"),
-).round(1)
-```
-
-### Step 4: Compare clusters
-
-```python
-sns.set_theme()
-fig, ax = plt.subplots(figsize=(8, 5))
-sns.boxplot(x="Cluster", y="Amount", data=rfm_clean, ax=ax)
-ax.set_title("Số tiền khách hàng đã mua hàng trong từng cụm với K = 3")
-plt.show()
-```
-
-<img width="1131" height="571" alt="Amount by cluster, K = 3" src="images/boxplot_amount_k3.png" />
-
-Insights (values read from the chart, approximate)
-
-- Cluster 2 has the highest spend: median about £2,700, middle half of customers between about £1,900 and £3,900, and no outliers.
-- Cluster 0 is the middle group: median about £1,000, middle half between about £650 and £1,600. It has many high outliers up to about £5,300, which overlap the range of Cluster 2.
-- Cluster 1 has the lowest spend: median about £300, middle half between about £170 and £430, and almost all customers below about £850.
-- Median spend separates the three clusters clearly (about £300, £1,000, £2,700), but Clusters 0 and 2 overlap at the top end, so Monetary alone does not fully separate them.
-
-## V. Insight and Recommendation
+## VI. Insight and Recommendation
 
 | Insight | Recommendation |
 |---|---|
-| Cluster 2 (High-Value) is made up of frequent, recent, high spenders. Median spend is about £2,700 with no outliers, so spend is consistently high. | Reward and retain with loyalty benefits and priority service, since losing these customers costs the most revenue. |
-| Cluster 0 (Medium-Value) has moderate activity, with median spend about £1,000. High outliers reach the spend range of Cluster 2. | Upsell with bundles and cross-sell offers, and track the high-spend outliers as candidates to move into High-Value. |
-| Cluster 1 (Low-Value) is inactive or low-spending, with median spend about £300 and almost all customers below about £850. | Run engagement campaigns to drive repeat purchases, and measure reactivation before increasing spend on this group. |
-| Median spend separates the three clusters, but Clusters 0 and 2 overlap at the top end. | Define segment rules on Recency and Frequency as well as Monetary, so that high-spend outliers in Cluster 0 are not treated as High-Value by mistake. |
+| K = 3 has the highest silhouette score (0.34), against 0.31 for K = 7 and 0.30 for K = 5. All scores are in the moderate range and close together, and the Amount boxplot at K = 3 shows clearly separated clusters, with overlap only through the high outliers of Cluster 0. | Use K = 3 as the working segmentation, and review the high-spend customers of Cluster 0 individually, since they are the ones most likely to sit near the boundary with Cluster 2. |
+| With K = 3, Cluster 2 (High-Value) is made up of frequent, recent, high spenders, with median spend about £2,700 and no outliers. | Reward and retain with loyalty benefits and priority service, since losing these customers costs the most revenue. |
+| With K = 3, Cluster 0 (Medium-Value) has moderate activity, with median spend about £1,000 and high outliers that reach the range of Cluster 2. | Upsell with bundles and cross-sell offers, and track the high-spend outliers as candidates to move into High-Value. |
+| With K = 3, Cluster 1 (Low-Value) is inactive or low-spending, with median spend about £300 and almost all customers below about £850. | Run engagement campaigns to drive repeat purchases, and measure reactivation before increasing spend on this group. |
+| With K = 5, the upper-middle group (Cluster 3, median about £1,750) is separated from the top group (Cluster 1, median about £3,100), and low-value customers are split into Cluster 4 (about £390) and Cluster 2 (about £230). The silhouette score is the lowest of the three (0.30). | Move to K = 5 only if the company can run more than three distinct strategies and a test shows that the extra clusters respond differently. |
+| With K = 7, three pairs of clusters have almost the same Amount distribution, and the silhouette score (0.31) is not better than K = 3. | Do not use K = 7 for strategy, since the extra clusters add complexity without a clear difference in spend or a better fit. |
+| High outliers appear in the middle clusters at every K (Cluster 0 at K = 3, Clusters 0 and 3 at K = 5, Cluster 6 at K = 7). | Review these customers individually, since they spend like a higher segment but are grouped with a lower one by the other RFM metrics. |
 
 ## Tech Stack
 
-- Python: pandas, numpy, scikit-learn (StandardScaler, KMeans, silhouette_score), seaborn, matplotlib
-- RFM model and K-means (K = 3)
-
-## Repository Structure
-
-```
-.
-├── README.md
-├── customer_segmentation.ipynb
-├── data/
-│   └── transactions.csv
-└── images/
-    └── boxplot_amount_k3.png
-```
+- Python: pandas, scikit-learn (K-means, silhouette score), seaborn, matplotlib
+- RFM model, K-means, silhouette score
